@@ -1,37 +1,6 @@
 //bomberfish
 
 var packageJson = require('../package.json');
-class KVAdapter {
-	ns;
-
-	constructor(ns) {
-		this.ns = ns;
-	}
-
-	async get(key) {
-		return await this.ns.get(key);
-	}
-
-	async set(key, value) {
-		await this.ns.put(key, value);
-	}
-
-	async has(key) {
-		return (await this.ns.list()).keys.some(e => e.name === key);
-	}
-
-	async delete(key) {
-		await this.ns.delete(key);
-		return true;
-	}
-
-	async *entries() {
-		for (const {
-			name
-		} of (await this.ns.list()).keys) yield [name, await this.get(name)];
-	}
-
-}
 
 /**
  * @internal
@@ -1734,10 +1703,10 @@ function createBareServer(directory, init = {}) {
 
 	if (!init.database) {
 		const database = new Map();
-		const interval = setInterval(() => cleanupDatabase(database), 1000);
 		init.database = database;
-		cleanup.push(() => clearInterval(interval));
 	}
+
+	cleanupDatabase(init.database);
 
 	const server = new Server(directory, {
 		...init,
@@ -1752,11 +1721,8 @@ function createBareServer(directory, init = {}) {
 	return server;
 }
 
-let kvNS = BARE
-const kvDB = new KVAdapter(kvNS)
 const bareServer = createBareServer('/', {
 	logErrors: true,
-	database: kvDB,
 	maintainer: {
 		email: 'hariz@bomberfish.ca',
 		website: 'https://bomberfish.ca'
@@ -1764,7 +1730,6 @@ const bareServer = createBareServer('/', {
 });
 
 addEventListener('fetch', event => {
-	cleanupDatabase(kvDB);
 	if (bareServer.shouldRoute(event.request)) {
 		event.respondWith(
 			bareServer.routeRequest(event.request)
