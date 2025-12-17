@@ -718,8 +718,8 @@ class BareError extends Error {
 const project = {
 	name: 'Infrared Bare Server',
 	description: 'TompHTTP-compliant proxy server running on Cloudflare Workers.',
-	website: 'https://infrared.bomberfish.ca',
-	repository: 'https://github.com/BomberFish/Infrared',
+	website: 'https://ir.c48.uk',
+	repository: 'https://github.com/ThisCatLikesCrypto/Infrared',
 	version: packageJson.version
 };
 function json(status, json) {
@@ -761,7 +761,7 @@ class Server extends EventTarget {
 
 	get instanceInfo() {
 		return {
-			versions: ['v1', 'v2', 'v3'],
+			versions: ['v3'],
 			language: 'Cloudflare',
 			maintainer: this.options.maintainer,
 			project
@@ -838,289 +838,6 @@ class Server extends EventTarget {
 
 }
 
-const reserveChar = '%';
-function decodeProtocol(protocol) {
-	let result = '';
-
-	for (let i = 0; i < protocol.length; i++) {
-		const char = protocol[i];
-
-		if (char === reserveChar) {
-			const code = parseInt(protocol.slice(i + 1, i + 3), 16);
-			const decoded = String.fromCharCode(code);
-			result += decoded;
-			i += 2;
-		} else {
-			result += char;
-		}
-	}
-
-	return result;
-}
-
-function randomHex(byteLength) {
-	const bytes = new Uint8Array(byteLength);
-	crypto.getRandomValues(bytes);
-	let hex = '';
-
-	for (const byte of bytes) hex += byte.toString(16).padStart(2, '0');
-
-	return hex;
-}
-const noBody = ['GET', 'HEAD'];
-async function bareFetch(request, signal, requestHeaders, remote) {
-	return await fetch(`${remote.protocol}//${remote.host}:${remote.port}${remote.path}`, {
-		headers: requestHeaders,
-		method: request.method,
-		body: noBody.includes(request.method) ? undefined : await request.blob(),
-		signal,
-		redirect: 'manual'
-	});
-}
-
-async function bareFetchV3(request, signal, requestHeaders, remote) {
-	return await fetch(remote, {
-		headers: requestHeaders,
-		method: request.method,
-		body: noBody.includes(request.method) ? undefined : await request.blob(),
-		signal,
-		redirect: 'manual'
-	});
-}
-
-async function upgradeBareFetch(request, signal, requestHeaders, remote) {
-	const res = await fetch(`${remote.protocol}//${remote.host}:${remote.port}${remote.path}`, {
-		headers: requestHeaders,
-		method: request.method,
-		signal
-	});
-	if (!res.webSocket) throw new Error("server didn't accept WebSocket");
-	return [res, res.webSocket];
-}
-
-const validProtocols$1 = ['http:', 'https:', 'ws:', 'wss:'];
-
-function loadForwardedHeaders$1(forward, target, request) {
-	for (const header of forward) {
-		if (request.headers.has(header)) {
-			target[header] = request.headers.get(header);
-		}
-	}
-}
-
-function readHeaders$1(request) {
-	const remote = {};
-	const headers = {};
-	Reflect.setPrototypeOf(headers, null);
-
-	for (const remoteProp of ['host', 'port', 'protocol', 'path']) {
-		const header = `x-bare-${remoteProp}`;
-
-		if (request.headers.has(header)) {
-			const value = request.headers.get(header);
-
-			switch (remoteProp) {
-				case 'port':
-					if (isNaN(parseInt(value))) {
-						throw new BareError(400, {
-							code: 'INVALID_BARE_HEADER',
-							id: `request.headers.${header}`,
-							message: `Header was not a valid integer.`
-						});
-					}
-
-					break;
-
-				case 'protocol':
-					if (!validProtocols$1.includes(value)) {
-						throw new BareError(400, {
-							code: 'INVALID_BARE_HEADER',
-							id: `request.headers.${header}`,
-							message: `Header was invalid`
-						});
-					}
-
-					break;
-			}
-
-			remote[remoteProp] = value;
-		} else {
-			throw new BareError(400, {
-				code: 'MISSING_BARE_HEADER',
-				id: `request.headers.${header}`,
-				message: `Header was not specified.`
-			});
-		}
-	}
-
-	if (request.headers.has('x-bare-headers')) {
-		try {
-			const json = JSON.parse(request.headers.get('x-bare-headers'));
-
-			for (const header in json) {
-				if (typeof json[header] !== 'string' && !Array.isArray(json[header])) {
-					throw new BareError(400, {
-						code: 'INVALID_BARE_HEADER',
-						id: `bare.headers.${header}`,
-						message: `Header was not a String or Array.`
-					});
-				}
-			}
-
-			Object.assign(headers, json);
-		} catch (error) {
-			if (error instanceof SyntaxError) {
-				throw new BareError(400, {
-					code: 'INVALID_BARE_HEADER',
-					id: `request.headers.x-bare-headers`,
-					message: `Header contained invalid JSON. (${error.message})`
-				});
-			} else {
-				throw error;
-			}
-		}
-	} else {
-		throw new BareError(400, {
-			code: 'MISSING_BARE_HEADER',
-			id: `request.headers.x-bare-headers`,
-			message: `Header was not specified.`
-		});
-	}
-
-	if (request.headers.has('x-bare-forward-headers')) {
-		let json;
-
-		try {
-			json = JSON.parse(request.headers.get('x-bare-forward-headers'));
-		} catch (error) {
-			throw new BareError(400, {
-				code: 'INVALID_BARE_HEADER',
-				id: `request.headers.x-bare-forward-headers`,
-				message: `Header contained invalid JSON. (${error instanceof Error ? error.message : error})`
-			});
-		}
-
-		loadForwardedHeaders$1(json, headers, request);
-	} else {
-		throw new BareError(400, {
-			code: 'MISSING_BARE_HEADER',
-			id: `request.headers.x-bare-forward-headers`,
-			message: `Header was not specified.`
-		});
-	}
-
-	return {
-		remote: remote,
-		headers
-	};
-}
-
-const tunnelRequest$1 = async request => {
-	const {
-		remote,
-		headers
-	} = readHeaders$1(request);
-	const response = await bareFetch(request, request.signal, headers, remote);
-	const responseHeaders = new Headers();
-
-	for (const [header, value] of response.headers) {
-		if (header === 'content-encoding' || header === 'x-content-encoding') responseHeaders.set('content-encoding', value); else if (header === 'content-length') responseHeaders.set('content-length', value);
-	}
-
-	responseHeaders.set('x-bare-headers', JSON.stringify(Object.fromEntries(response.headers)));
-	responseHeaders.set('x-bare-status', response.status.toString());
-	responseHeaders.set('x-bare-status-text', response.statusText);
-	return new Response(response.body, {
-		status: 200,
-		headers: responseHeaders
-	});
-};
-
-const metaExpiration$1 = 30e3;
-
-const wsMeta = async (request, options) => {
-	if (request.method === 'OPTIONS') {
-		return new Response(undefined, {
-			status: 200
-		});
-	}
-
-	if (!request.headers.has('x-bare-id')) {
-		throw new BareError(400, {
-			code: 'MISSING_BARE_HEADER',
-			id: 'request.headers.x-bare-id',
-			message: 'Header was not specified'
-		});
-	}
-
-	const id = request.headers.get('x-bare-id');
-	const meta = await options.database.get(id); // check if meta isn't undefined and if the version equals 1
-
-	if (meta?.value.v !== 1) throw new BareError(400, {
-		code: 'INVALID_BARE_HEADER',
-		id: 'request.headers.x-bare-id',
-		message: 'Unregistered ID'
-	});
-	await options.database.delete(id);
-	return json(200, {
-		headers: meta.value.response?.headers
-	});
-};
-
-const wsNewMeta = async (request, options) => {
-	const id = randomHex(16);
-	await options.database.set(id, {
-		value: {
-			v: 1
-		},
-		expires: Date.now() + metaExpiration$1
-	});
-	return new Response(id);
-};
-
-const tunnelSocket$1 = async (request, options) => {
-	const [firstProtocol, data] = request.headers.get('sec-websocket-protocol')?.split(/,\s*/g) || [];
-	if (firstProtocol !== 'bare') throw new BareError(400, {
-		code: 'INVALID_BARE_HEADER',
-		id: `request.headers.sec-websocket-protocol`,
-		message: `Meta was not specified.`
-	});
-	const {
-		remote,
-		headers,
-		forward_headers: forwardHeaders,
-		id
-	} = JSON.parse(decodeProtocol(data));
-	loadForwardedHeaders$1(forwardHeaders, headers, request);
-	if (!id) throw new BareError(400, {
-		code: 'INVALID_BARE_HEADER',
-		id: `request.headers.sec-websocket-protocol`,
-		message: `Expected ID.`
-	});
-	const [remoteResponse, remoteSocket] = await upgradeBareFetch(request, request.signal, headers, remote);
-	const meta = await options.database.get(id);
-
-	if (meta?.value.v === 1) {
-		meta.value.response = {
-			headers: Object.fromEntries(remoteResponse.headers)
-		};
-		await options.database.set(id, meta);
-	}
-
-	return new Response(undefined, {
-		status: 101,
-		webSocket: remoteSocket
-	});
-};
-
-function registerV1(server) {
-	console.log('Registering v1 endpoint')
-	server.routes.set('/v1/', tunnelRequest$1);
-	server.routes.set('/v1/ws-new-meta', wsNewMeta);
-	server.routes.set('/v1/ws-meta', wsMeta);
-	server.socketRoutes.set('/v1/', tunnelSocket$1);
-}
-
 const MAX_HEADER_VALUE = 3072;
 /**
  *
@@ -1186,7 +903,6 @@ function joinHeaders(headers) {
 	return output;
 }
 
-const validProtocols = ['http:', 'https:', 'ws:', 'wss:'];
 const forbiddenForwardHeaders = ['connection', 'transfer-encoding', 'host', 'connection', 'origin', 'referer'];
 const forbiddenPassHeaders = ['vary', 'connection', 'transfer-encoding', 'access-control-allow-headers', 'access-control-allow-methods', 'access-control-expose-headers', 'access-control-max-age', 'access-control-request-headers', 'access-control-request-method']; // common defaults
 
@@ -1206,178 +922,6 @@ function loadForwardedHeaders(forward, target, request) {
 }
 
 const splitHeaderValue = /,\s*/g;
-
-function readHeaders(request) {
-	const remote = Object.setPrototypeOf({}, null);
-	const sendHeaders = Object.setPrototypeOf({}, null);
-	const passHeaders = [...defaultPassHeaders];
-	const passStatus = [];
-	const forwardHeaders = [...defaultForwardHeaders]; // should be unique
-
-	const cache = new URL(request.url).searchParams.has('cache');
-
-	if (cache) {
-		passHeaders.push(...defaultCachePassHeaders);
-		passStatus.push(cacheNotModified);
-		forwardHeaders.push(...defaultCacheForwardHeaders);
-	}
-
-	const headers = joinHeaders(request.headers);
-
-	for (const remoteProp of ['host', 'port', 'protocol', 'path']) {
-		const header = `x-bare-${remoteProp}`;
-
-		if (headers.has(header)) {
-			const value = headers.get(header);
-
-			switch (remoteProp) {
-				case 'port':
-					if (isNaN(parseInt(value))) {
-						throw new BareError(400, {
-							code: 'INVALID_BARE_HEADER',
-							id: `request.headers.${header}`,
-							message: `Header was not a valid integer.`
-						});
-					}
-
-					break;
-
-				case 'protocol':
-					if (!validProtocols.includes(value)) {
-						throw new BareError(400, {
-							code: 'INVALID_BARE_HEADER',
-							id: `request.headers.${header}`,
-							message: `Header was invalid`
-						});
-					}
-
-					break;
-			}
-
-			remote[remoteProp] = value;
-		} else {
-			throw new BareError(400, {
-				code: 'MISSING_BARE_HEADER',
-				id: `request.headers.${header}`,
-				message: `Header was not specified.`
-			});
-		}
-	}
-
-	if (headers.has('x-bare-headers')) {
-		try {
-			const json = JSON.parse(headers.get('x-bare-headers'));
-
-			for (const header in json) {
-				const value = json[header];
-
-				if (typeof value === 'string') {
-					sendHeaders[header] = value;
-				} else if (Array.isArray(value)) {
-					const array = [];
-
-					for (const val in value) {
-						if (typeof val !== 'string') {
-							throw new BareError(400, {
-								code: 'INVALID_BARE_HEADER',
-								id: `bare.headers.${header}`,
-								message: `Header was not a String.`
-							});
-						}
-
-						array.push(val);
-					}
-
-					sendHeaders[header] = array;
-				} else {
-					throw new BareError(400, {
-						code: 'INVALID_BARE_HEADER',
-						id: `bare.headers.${header}`,
-						message: `Header was not a String.`
-					});
-				}
-			}
-		} catch (error) {
-			if (error instanceof SyntaxError) {
-				throw new BareError(400, {
-					code: 'INVALID_BARE_HEADER',
-					id: `request.headers.x-bare-headers`,
-					message: `Header contained invalid JSON. (${error.message})`
-				});
-			} else {
-				throw error;
-			}
-		}
-	} else {
-		throw new BareError(400, {
-			code: 'MISSING_BARE_HEADER',
-			id: `request.headers.x-bare-headers`,
-			message: `Header was not specified.`
-		});
-	}
-
-	if (headers.has('x-bare-pass-status')) {
-		const parsed = headers.get('x-bare-pass-status').split(splitHeaderValue);
-
-		for (const value of parsed) {
-			const number = parseInt(value);
-
-			if (isNaN(number)) {
-				throw new BareError(400, {
-					code: 'INVALID_BARE_HEADER',
-					id: `request.headers.x-bare-pass-status`,
-					message: `Array contained non-number value.`
-				});
-			} else {
-				passStatus.push(number);
-			}
-		}
-	}
-
-	if (headers.has('x-bare-pass-headers')) {
-		const parsed = headers.get('x-bare-pass-headers').split(splitHeaderValue);
-
-		for (let header of parsed) {
-			header = header.toLowerCase();
-
-			if (forbiddenPassHeaders.includes(header)) {
-				throw new BareError(400, {
-					code: 'FORBIDDEN_BARE_HEADER',
-					id: `request.headers.x-bare-forward-headers`,
-					message: `A forbidden header was passed.`
-				});
-			} else {
-				passHeaders.push(header);
-			}
-		}
-	}
-
-	if (headers.has('x-bare-forward-headers')) {
-		const parsed = headers.get('x-bare-forward-headers').split(splitHeaderValue);
-
-		for (let header of parsed) {
-			header = header.toLowerCase();
-
-			if (forbiddenForwardHeaders.includes(header)) {
-				throw new BareError(400, {
-					code: 'FORBIDDEN_BARE_HEADER',
-					id: `request.headers.x-bare-forward-headers`,
-					message: `A forbidden header was forwarded.`
-				});
-			} else {
-				forwardHeaders.push(header);
-			}
-		}
-	}
-
-	return {
-		remote,
-		sendHeaders,
-		passHeaders,
-		passStatus,
-		forwardHeaders
-	};
-}
 
 function readHeadersV3(request) {
 	var remote = ""
@@ -1525,37 +1069,6 @@ function readHeadersV3(request) {
 	};
 }
 
-const tunnelRequest = async request => {
-	const {
-		remote,
-		sendHeaders,
-		passHeaders,
-		passStatus,
-		forwardHeaders
-	} = readHeaders(request);
-	loadForwardedHeaders(forwardHeaders, sendHeaders, request);
-	const response = await bareFetch(request, request.signal, sendHeaders, remote);
-	const responseHeaders = new Headers();
-
-	for (const [header, value] of passHeaders) {
-		if (!response.headers.has(header)) continue;
-		responseHeaders.set(header, value);
-	}
-
-	const status = passStatus.includes(response.status) ? response.status : 200;
-
-	if (status !== cacheNotModified) {
-		responseHeaders.set('x-bare-status', response.status.toString());
-		responseHeaders.set('x-bare-status-text', response.statusText);
-		responseHeaders.set('x-bare-headers', JSON.stringify(Object.fromEntries(response.headers)));
-	}
-
-	return new Response(response.body, {
-		status,
-		headers: splitHeaders(responseHeaders)
-	});
-};
-
 const tunnelRequestV3 = async request => {
 	const {
 		remote,
@@ -1587,65 +1100,6 @@ const tunnelRequestV3 = async request => {
 	});
 };
 
-const metaExpiration = 30e3;
-
-const getMeta = async (request, options) => {
-	if (request.method === 'OPTIONS') {
-		return new Response(undefined, {
-			status: 200
-		});
-	}
-
-	if (!request.headers.has('x-bare-id')) {
-		throw new BareError(400, {
-			code: 'MISSING_BARE_HEADER',
-			id: 'request.headers.x-bare-id',
-			message: 'Header was not specified'
-		});
-	}
-
-	const id = request.headers.get('x-bare-id');
-	const meta = await options.database.get(id);
-	if (meta?.value.v !== 2) throw new BareError(400, {
-		code: 'INVALID_BARE_HEADER',
-		id: 'request.headers.x-bare-id',
-		message: 'Unregistered ID'
-	});
-	if (!meta.value.response) throw new BareError(400, {
-		code: 'INVALID_BARE_HEADER',
-		id: 'request.headers.x-bare-id',
-		message: 'Meta not ready'
-	});
-	await options.database.delete(id);
-	const responseHeaders = new Headers();
-	responseHeaders.set('x-bare-status', meta.value.response.status.toString());
-	responseHeaders.set('x-bare-status-text', meta.value.response.statusText);
-	responseHeaders.set('x-bare-headers', JSON.stringify(meta.value.response.headers));
-	return new Response(undefined, {
-		status: 200,
-		headers: splitHeaders(responseHeaders)
-	});
-};
-
-const newMeta = async (request, options) => {
-	const {
-		remote,
-		sendHeaders,
-		forwardHeaders
-	} = readHeaders(request);
-	const id = randomHex(16);
-	await options.database.set(id, {
-		expires: Date.now() + metaExpiration,
-		value: {
-			v: 2,
-			remote,
-			sendHeaders,
-			forwardHeaders
-		}
-	});
-	return new Response(id);
-};
-
 const tunnelSocket = async (request, options) => {
 	const id = request.headers.get('sec-websocket-protocol');
 	if (!id) throw new BareError(400, {
@@ -1674,14 +1128,6 @@ const tunnelSocket = async (request, options) => {
 		webSocket: remoteSocket
 	});
 };
-
-function registerV2(server) {
-	console.log('Registering v2 endpoint')
-	server.routes.set('/v2/', tunnelRequest);
-	server.routes.set('/v2/ws-new-meta', newMeta);
-	server.routes.set('/v2/ws-meta', getMeta);
-	server.socketRoutes.set('/v2/', tunnelSocket);
-}
 
 function registerV3(server) {
 	console.log('Registering v3 endpoint')
@@ -1712,8 +1158,6 @@ function createBareServer(directory, init = {}) {
 		...init,
 		database: new JSONDatabaseAdapter(init.database)
 	});
-	registerV1(server);
-	registerV2(server);
 	registerV3(server);
 	server.addEventListener('close', () => {
 		for (const cb of cleanup) cb();
@@ -1724,8 +1168,8 @@ function createBareServer(directory, init = {}) {
 const bareServer = createBareServer('/', {
 	logErrors: true,
 	maintainer: {
-		email: 'hariz@bomberfish.ca',
-		website: 'https://bomberfish.ca'
+		email: 'contact@wilburwilliams.uk',
+		website: 'https://c48.uk'
 	}
 });
 
