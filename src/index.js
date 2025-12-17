@@ -838,6 +838,30 @@ class Server extends EventTarget {
 
 }
 
+const reserveChar = '%';
+
+const noBody = ['GET', 'HEAD'];
+
+async function bareFetchV3(request, signal, requestHeaders, remote) {
+	return await fetch(remote, {
+		headers: requestHeaders,
+		method: request.method,
+		body: noBody.includes(request.method) ? undefined : await request.blob(),
+		signal,
+		redirect: 'manual'
+	});
+}
+
+async function upgradeBareFetch(request, signal, requestHeaders, remote) {
+	const res = await fetch(`${remote.protocol}//${remote.host}:${remote.port}${remote.path}`, {
+		headers: requestHeaders,
+		method: request.method,
+		signal
+	});
+	if (!res.webSocket) throw new Error("server didn't accept WebSocket");
+	return [res, res.webSocket];
+}
+
 const MAX_HEADER_VALUE = 3072;
 /**
  *
@@ -903,6 +927,7 @@ function joinHeaders(headers) {
 	return output;
 }
 
+const validProtocols = ['http:', 'https:', 'ws:', 'wss:'];
 const forbiddenForwardHeaders = ['connection', 'transfer-encoding', 'host', 'connection', 'origin', 'referer'];
 const forbiddenPassHeaders = ['vary', 'connection', 'transfer-encoding', 'access-control-allow-headers', 'access-control-allow-methods', 'access-control-expose-headers', 'access-control-max-age', 'access-control-request-headers', 'access-control-request-method']; // common defaults
 
